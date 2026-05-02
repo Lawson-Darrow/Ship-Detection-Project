@@ -1,0 +1,30 @@
+# Generated notebook artifacts
+outputs/
+ship_detection_outputs.zip
+*.zip
+
+# Raw and expanded dataset files
+data/*
+!data/
+!data/README.md
+
+# Presentation and Office temporary files
+*.ppt
+*.pptx
+~$*
+
+# Python and notebook cache files
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Local environment files
+.env
+.venv/
+venv/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.cursor/
