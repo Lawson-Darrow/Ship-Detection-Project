@@ -3,6 +3,10 @@ outputs/
 ship_detection_outputs.zip
 *.zip
 
+# Detection training outputs (ultralytics runs, model weights auto-downloaded)
+runs/
+*.pt
+
 # Raw and expanded dataset files
 data/*
 !data/
