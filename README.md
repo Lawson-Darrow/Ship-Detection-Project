@@ -1,184 +1,142 @@
-# Ship Detection in Satellite Imagery
+# Ship Detection & Localization in Satellite Imagery
 
-This repository contains a machine learning project for binary ship detection in
-satellite image chips. The project compares traditional machine learning models
-trained on hand-crafted image features against a convolutional neural network
-trained on raw image pixels.
+Object detection of ships in high-resolution optical satellite imagery: predicting
+**bounding boxes** (localization) for every ship in an image and evaluating with the
+standard COCO detection metrics (mAP, IoU, area-stratified AP). Two detectors are
+trained and compared on a common, leakage-controlled protocol:
 
-The main deliverable is a single Colab-ready notebook:
+- **YOLOv8** (single-stage) — headline detector, reported across 3 seeds.
+- **Faster-RCNN-v2** (two-stage) — comparison detector, scored by the identical evaluator.
 
-- `Ship_Detection_Project_2.ipynb`
+> This repository began as a binary *chip-classification* course project (ship vs.
+> no-ship on 80x80 tiles). That work is preserved as **Phase 1** below. **Phase 2**
+> (this top section) is the real detection/localization task: boxes, mAP, and IoU on
+> a dedicated detection dataset.
 
-## Project Question
+## TL;DR results
 
-Can traditional machine-learning models trained on engineered RGB, HSV, edge,
-texture, and shape features compete with a CNN trained directly on raw satellite
-image pixels for ship detection?
+Single-class ("ship") detection on **ShipRSImageNet**, evaluated on the official
+validation split (550 images, 2,949 ship instances) with `pycocotools`:
 
-## Dataset
+| Detector | AP@[.5:.95] | AP@0.5 | AP@0.75 | AP small | AP medium | AP large |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **YOLOv8s** (3-seed mean ± std) | **0.634 ± 0.004** | 0.799 ± 0.002 | 0.702 ± 0.006 | 0.203 ± 0.004 | 0.662 ± 0.005 | 0.840 ± 0.006 |
+| Faster-RCNN-v2 (1 seed) | 0.580 | 0.735 | 0.670 | 0.152 | 0.597 | 0.784 |
 
-The project uses the Kaggle Ships in Satellite Imagery dataset, commonly
-distributed as `shipsnet.json`.
+Takeaways: YOLOv8s outperforms Faster-RCNN on this task, the headline result is
+stable across seeds (std ≈ 0.004), and **both detectors degrade sharply on small
+ships** (AP ≈ 0.15–0.20 vs ≈ 0.84 for large) — the dominant failure mode and the
+clearest direction for future work.
 
-Expected dataset characteristics:
+## Phase 2 — Object Detection
 
-- 4,000 total image chips
-- 80 x 80 RGB images
-- 1,000 ship images
-- 3,000 no-ship images
-- Scene and location metadata used for leakage diagnostics
+### Dataset
 
-The raw dataset file is not committed to this repository because
-`shipsnet.json` is larger than GitHub's standard file-size limit. To reproduce
-the notebook, place the dataset at:
+[ShipRSImageNet](https://github.com/zzndream/ShipRSImageNet) V1 — 3,435 high-resolution
+optical remote-sensing images (~930x930), 17,573 annotated ship instances. This project
+uses the **single "ship" class** (the dataset's level-0 `Ship` category; the `Dock`
+category and the fine-grained 50-class hierarchy are out of scope and treated as
+background).
 
-```text
-data/shipsnet.json
+**Evaluation protocol (honest + benchmark-comparable):** ShipRSImageNet's official
+`test` split ships images only (labels withheld for benchmarking). Following standard
+practice on this dataset, models are **trained on the official `train` split (2,198
+images)** and **evaluated on the official `val` split (550 images)**. The withheld
+`test` images are used only for qualitative inspection.
+
+Conversion is handled by `scripts/prepare_shiprs.py`, which extracts the dataset,
+filters to the ship class, converts COCO boxes to YOLO format, validates every box
+(0 clipped / 0 degenerate at build time), and emits area-stratified instance counts.
+
+### Models & training
+
+- **YOLOv8s**, fine-tuned from COCO-pretrained weights, `imgsz=1024` (ShipRSImageNet
+  ships are small), 100 epochs with early stopping, deterministic, seeds {0, 1, 2}.
+- **Faster-RCNN-v2** (ResNet50-FPN), `min_size=1024` so the smallest ships survive the
+  input resize, 26 epochs.
+
+Both detectors are scored with the same `pycocotools` evaluator against the same
+ship-only validation ground truth, so the comparison is strictly apples-to-apples.
+
+### Results
+
+Headline detector across three seeds (ultralytics validation metrics):
+
+| Seed | mAP@0.5 | mAP@[.5:.95] | Precision | Recall |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | 0.869 | 0.670 | 0.874 | 0.828 |
+| 1 | 0.849 | 0.663 | 0.871 | 0.812 |
+| 2 | 0.867 | 0.670 | 0.878 | 0.817 |
+| **mean ± std** | **0.862 ± 0.011** | **0.668 ± 0.004** | 0.874 ± 0.003 | 0.819 ± 0.008 |
+
+COCO area-stratified AP and the YOLOv8s-vs-Faster-RCNN comparison are in the TL;DR
+table above. Per-run COCO summaries are saved under `runs/coco_eval/`.
+
+### Failure analysis
+
+The area-stratified AP exposes a consistent weakness: small ships (COCO area < 32²)
+score AP ≈ 0.20 for YOLOv8s and ≈ 0.15 for Faster-RCNN, versus ≈ 0.84 / 0.78 for large
+ships. Recall on small ships is similarly low (AR ≈ 0.30). The qualitative figures
+(`runs/detect/yolov8s_s0/qualitative/`) deliberately include the densest scenes and the
+smallest-ship images: most misses are tiny vessels in cluttered ports and faint wakes,
+not large clearly-imaged ships.
+
+### Reproduce
+
+```bash
+# 1. Download ShipRSImageNet_V1.zip into data/ (HF mirror: insomnia7/ShipRSImageNet)
+# 2. Build the YOLO dataset (extract + convert + validate)
+python scripts/prepare_shiprs.py
+
+# 3. Run the full experiment suite (YOLOv8 x3 seeds, COCO eval, Faster-RCNN, figures)
+bash scripts/run_ship_experiments.sh
+
+# Or individual steps:
+python scripts/train_yolo.py --model yolov8s.pt --epochs 100 --imgsz 1024 --seed 0
+python scripts/eval_coco.py  --weights runs/detect/yolov8s_s0/weights/best.pt
+python scripts/train_frcnn.py --epochs 26 --seed 0
+python scripts/visualize.py  --weights runs/detect/yolov8s_s0/weights/best.pt
 ```
 
-The notebook can also locate the file from Google Drive when run in Colab.
+Environment: Python 3.12, PyTorch 2.6 (CUDA), `ultralytics`, `pycocotools`. Trained on
+a single RTX 4090.
 
-## Repository Contents
+## Phase 1 — Chip Classification (original course project)
+
+The original work is a binary **ship vs. no-ship** classifier on 80x80 image chips from
+the Kaggle *Ships in Satellite Imagery* dataset (`shipsnet.json`), comparing hand-crafted
+features (RGB/HSV statistics, edges, texture, shape) under classical models against a
+ResNet18 transfer-learning CNN on raw pixels.
+
+A notable strength of this phase is its **leakage-aware evaluation**: alongside a
+stratified chip-level split it implements a stricter **scene-held-out** (`GroupShuffleSplit`)
+protocol so no source scene appears in both train and test. The full analysis is in the
+notebook:
+
+- `Ship_Detection_Project_2.ipynb` (Colab-ready)
+
+On the scene-held-out split, the ResNet18 transfer-learning CNN reached F1 ≈ 0.998 /
+ROC-AUC ≈ 1.0; the tuned RBF SVM reached F1 ≈ 0.95. The chip dataset is close to solved,
+which is part of the motivation for moving to the harder detection task in Phase 2.
+
+## Repository structure
 
 ```text
 .
-├── Ship_Detection_Project_2.ipynb      # Complete Colab-ready analysis notebook
-├── README.md                           # Project overview and run instructions
-├── data/
-│   └── README.md                       # Dataset placement instructions
-├── Ship_Detection_Proposal.pdf         # Original project proposal
-└── Project 2 Requirements.pdf          # Course project requirements
+├── scripts/                      # Phase 2 detection pipeline (runnable, reproducible)
+│   ├── prepare_shiprs.py         #   ShipRSImageNet -> validated YOLO dataset
+│   ├── train_yolo.py             #   YOLOv8 training (seeded, deterministic)
+│   ├── eval_coco.py              #   COCO eval incl. area-stratified AP
+│   ├── train_frcnn.py            #   Faster-RCNN-v2 comparison detector
+│   ├── visualize.py              #   qualitative GT-vs-pred figures
+│   └── run_ship_experiments.sh   #   full suite driver
+├── Ship_Detection_Project_2.ipynb  # Phase 1 chip-classification analysis
+├── data/                         # datasets (gitignored)
+└── runs/                         # training + eval outputs (gitignored)
 ```
-
-Generated outputs, PowerPoint files, temporary files, and raw data are excluded
-from version control.
-
-## Notebook Workflow
-
-The notebook is designed to run from top to bottom in Google Colab. It performs:
-
-1. Runtime setup and dependency checks
-2. Dataset loading, validation, reshaping, and normalization
-3. Stratified train/test split with scene-overlap diagnostics
-4. Exploratory data analysis and report-ready visualizations
-5. Hand-crafted feature extraction and caching
-6. Untuned benchmark model training
-7. Hyperparameter tuning for traditional ML models
-8. Unsupervised learning with PCA, K-Means, and t-SNE
-9. CNN training with ResNet18 transfer learning
-10. Final supervised model comparison
-11. Scene-held-out generalization evaluation
-12. Artifact index and zip packaging for report assets
-
-## Models
-
-The supervised models include:
-
-- Logistic Regression baseline
-- Untuned Random Forest baseline
-- Tuned Random Forest
-- Tuned RBF SVM
-- Tuned XGBoost, with a scikit-learn fallback if XGBoost is unavailable
-- PCA-reduced Logistic Regression extension
-- ResNet18 transfer-learning CNN, with a custom CNN fallback
-
-The unsupervised analysis includes:
-
-- PCA explained variance and 2D projection
-- K-Means clustering and label-agreement metrics
-- t-SNE feature-space visualization
-
-## Evaluation
-
-Models are evaluated with:
-
-- Accuracy
-- Precision
-- Recall
-- F1-score
-- ROC-AUC
-- Confusion matrices
-- ROC curves
-
-The notebook also compares two evaluation protocols:
-
-- A proposal-aligned stratified chip-level split
-- A stricter scene-held-out split that prevents source-scene overlap between
-  train and test data
-
-## Current Results
-
-On the original stratified split, the strongest model was the ResNet18 transfer
-learning CNN:
-
-| Model | Accuracy | Precision | Recall | F1 | ROC-AUC |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| ResNet18 Transfer Learning | 0.9912 | 0.9801 | 0.9850 | 0.9825 | 0.9990 |
-| Tuned RBF SVM | 0.9675 | 0.9223 | 0.9500 | 0.9360 | 0.9891 |
-| Tuned XGBoost | 0.9662 | 0.9220 | 0.9450 | 0.9333 | 0.9893 |
-| Tuned Random Forest | 0.9538 | 0.9179 | 0.8950 | 0.9063 | 0.9872 |
-| Logistic Regression Baseline | 0.9338 | 0.8128 | 0.9550 | 0.8782 | 0.9823 |
-| PCA-10 Logistic Regression | 0.8388 | 0.6340 | 0.8400 | 0.7226 | 0.9229 |
-
-The scene-held-out evaluation was added because the original stratified split
-had source-scene overlap between train and test samples. The grouped evaluation
-assigns each source scene entirely to train or test.
-
-| Model | Accuracy | Precision | Recall | F1 | ROC-AUC |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Scene-Held-Out ResNet18 Transfer Learning | 0.9988 | 1.0000 | 0.9953 | 0.9977 | 1.0000 |
-| Scene-Held-Out Tuned RBF SVM | 0.9714 | 0.9286 | 0.9674 | 0.9476 | 0.9924 |
-| Scene-Held-Out Tuned XGBoost | 0.9689 | 0.9204 | 0.9674 | 0.9433 | 0.9959 |
-| Scene-Held-Out Logistic Regression | 0.9266 | 0.7955 | 0.9767 | 0.8768 | 0.9892 |
-
-These results should be interpreted alongside the split diagnostics. The
-scene-held-out protocol controls source-scene overlap, but the grouped split is
-not automatically harder for every random seed.
-
-## Running the Notebook
-
-Recommended environment:
-
-- Google Colab
-- GPU runtime for CNN training
-- Python 3.10+
-
-Steps:
-
-1. Upload or mount `shipsnet.json` so the notebook can find it at
-   `data/shipsnet.json` or in the configured Google Drive paths.
-2. Open `Ship_Detection_Project_2.ipynb` in Colab.
-3. Use `Runtime > Change runtime type > T4 GPU` for the CNN section.
-4. Run all cells from top to bottom.
-5. Review the generated tables and figures inline.
-6. Use the final artifact-packaging cell to create `ship_detection_outputs.zip`.
-
-The notebook writes report assets to an `outputs/` folder during execution.
-Those generated files are intentionally not tracked in git.
-
-## Artifact Outputs
-
-The notebook generates reusable report assets such as:
-
-- Dataset summary tables
-- Class-balance plots
-- Representative image chips
-- Pixel distribution plots
-- Scene metadata summaries
-- Pipeline diagram
-- Feature summary tables
-- Model metric tables
-- Confusion matrices
-- ROC curves
-- CNN training curves
-- Final model comparison plots
-- Scene-held-out protocol comparison tables and figures
 
 ## Notes
 
-- The project is an individual course project for MTH/CSE 4224 Intro to Machine
-  Learning.
-- ShipRSImageNet was reviewed as a possible additional dataset, but it is an
-  object-detection dataset with bounding-box annotations and is outside the
-  binary image-chip classification scope of this project.
-- Presentation files are not required for this repository and are ignored.
+- Phase 1 originated as an individual course project for MTH/CSE 4224.
+- ShipRSImageNet images and annotations are for academic use; see the dataset's terms.
+- Trained model weights and raw datasets are not committed (see `.gitignore`).
