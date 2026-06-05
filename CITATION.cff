@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Ship Detection and Localization in Satellite Imagery"
+authors:
+  - family-names: "Darrow"
+    given-names: "Lawson"
+repository-code: "https://github.com/Lawson-Darrow/Ship-Detection-Project"
+license: MIT
+version: "0.1.0"
+date-released: "2026-06-05"
+keywords:
+  - object-detection
+  - remote-sensing
+  - satellite-imagery
+  - yolo
+  - faster-rcnn
+references:
+  - type: article
+    title: "ShipRSImageNet: A Large-Scale Fine-Grained Dataset for Ship Detection in High-Resolution Optical Remote Sensing Images"
+    authors:
+      - family-names: "Zhang"
+        given-names: "Zhengning"
+    url: "https://ieeexplore.ieee.org/document/9512396"
+    year: 2021
